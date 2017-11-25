@@ -1233,6 +1233,8 @@ class ZooKeeper(object):
     LIVE_NODES_ZKNODE = '/live_nodes'
     ALIASES = '/aliases.json'
     CLUSTER_STATE = '/clusterstate.json'
+    COLLECTION_STATE = 'state.json'
+    COLLECTIONS = '/collections'
     SHARDS = 'shards'
     REPLICAS = 'replicas'
     STATE = 'state'
@@ -1269,14 +1271,35 @@ class ZooKeeper(object):
                 self.state = state
         self.zk.add_listener(connectionListener)
 
+        def addToCollectionDict(data):
+            json_data = json.loads(data.decode('utf-8'))
+            for key in json_data.keys():
+                LOG.info('Adding %s to collection dict', key)
+                self.collections[key] = json_data[key]
+
         @self.zk.DataWatch(ZooKeeper.CLUSTER_STATE)
         def watchClusterState(data, *args, **kwargs):
             if not data:
                 LOG.warning("No cluster state available: no collections defined?")
             else:
-                self.collections = json.loads(data.decode('utf-8'))
-                LOG.info('Updated collections: %s', self.collections)
-
+                json_data = json.loads(data.decode('utf-8'))
+                if len(json_data.keys()) == 0:
+                    LOG.warning('No cluster state availabe')
+                else:
+                    addToCollectionDict(json_data)
+                    LOG.info('Updated collections: %s', self.collections)
+                
+        @self.zk.ChildrenWatch(ZooKeeper.COLLECTIONS)
+        def watchCollections(data, *args, **kwargs):
+            for collection in data:
+                LOG.info('Gathering information for collectin [%s]', collection)
+                path = '{}/{}/{}'.format(ZooKeeper.COLLECTIONS, collection, ZooKeeper.COLLECTION_STATE)
+                @self.zk.DataWatch(path)
+                def watchState(data, *args, **kwargs):
+                    if data is None:
+                        self.collections.pop(collection, None)
+                    addToCollectionDict(data)
+        
         @self.zk.ChildrenWatch(ZooKeeper.LIVE_NODES_ZKNODE)
         def watchLiveNodes(children):
             self.liveNodes = children
